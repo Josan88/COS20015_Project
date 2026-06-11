@@ -1,0 +1,190 @@
+import { useState, useMemo, useEffect } from "react";
+import { INITIAL_EQUIPMENT, INITIAL_LOANS } from "../data/seedData";
+import { today, nextLoanId } from "../utils/helpers";
+
+/**
+ * useLoans
+ * Central state hook for equipment inventory and loan records.
+ * Loads data from SQLite database via Electron IPC.
+ */
+export function useLoans() {
+  const [equipment, setEquipment] = useState(INITIAL_EQUIPMENT);
+  const [loans, setLoans]         = useState(INITIAL_LOANS);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(null);
+
+  // ── Load data from database on mount ───────────────────────────────────
+  useEffect(() => {
+    loadDataFromDatabase();
+  }, []);
+
+  const loadDataFromDatabase = async () => {
+    try {
+      setLoading(true);
+      
+      // Map category to emoji icon
+      const getCategoryIcon = (category) => {
+        const icons = {
+          'Laptop': '💻',
+          'Camera': '📷',
+          'Microcontroller': '🎮',
+          'Projector': '🎬',
+        };
+        return icons[category] || '📦';
+      };
+
+      // Load equipment
+      if (window.electronAPI?.db?.equipment?.getAll) {
+        const equipResult = await window.electronAPI.db.equipment.getAll();
+        if (equipResult.success) {
+          const formattedEquip = equipResult.data.map(e => ({
+            id: e.equipmentID,
+            name: e.name,
+            category: e.category,
+            available: e.available === 1,
+            icon: getCategoryIcon(e.category)
+          }));
+          setEquipment(formattedEquip);
+        } else {
+          console.warn("Failed to load equipment:", equipResult.error);
+        }
+      }
+
+      // Load loans
+      if (window.electronAPI?.db?.loans?.getAll) {
+        const loansResult = await window.electronAPI.db.loans.getAll();
+        if (loansResult.success) {
+          const formattedLoans = loansResult.data.map(l => ({
+            id: l.id,
+            studentId: l.studentId,
+            studentName: l.studentName,
+            equipmentId: l.equipmentId,
+            equipmentName: l.equipmentName,
+            startDate: l.startDate,
+            returnDate: l.returnDate,
+            status: l.status === 'Borrowed' ? 'active' : l.status === 'Returned' ? 'returned' : l.status.toLowerCase(),
+            synced: l.synced === 1
+          }));
+          setLoans(formattedLoans);
+        } else {
+          console.warn("Failed to load loans:", loansResult.error);
+        }
+      }
+
+      setError(null);
+    } catch (err) {
+      console.error("Error loading data from database:", err);
+      setError(err.message);
+      // Fall back to seed data
+      setEquipment(INITIAL_EQUIPMENT);
+      setLoans(INITIAL_LOANS);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Derived stats ──────────────────────────────────────────────────────
+  const stats = useMemo(
+    () => ({
+      total:       equipment.length,
+      available:   equipment.filter((e) => e.available).length,
+      onLoan:      equipment.filter((e) => !e.available).length,
+      activeLoans: loans.filter((l) => l.status === "active").length,
+    }),
+    [equipment, loans]
+  );
+
+  // ── Actions ────────────────────────────────────────────────────────────
+
+  /**
+   * createLoan — records a new loan to the database
+   * @param {object} item       - equipment object being loaned
+   * @param {object} borrower   - { studentId, studentName, startDate }
+   */
+  const createLoan = async (item, borrower) => {
+    try {
+      const loanID = `L${String(loans.length + 1).padStart(3, '0')}`;
+      const loanData = {
+        loanID,
+        studentID: borrower.studentId,
+        equipmentID: item.id,
+        borrowDate: borrower.startDate,
+        status: 'Borrowed'
+      };
+
+      // Save to database
+      if (window.electronAPI?.db?.loans?.create) {
+        const result = await window.electronAPI.db.loans.create(loanData);
+        if (result.success) {
+          // Update local state
+          const newLoan = {
+            id: loanID,
+            studentId: borrower.studentId,
+            studentName: borrower.studentName,
+            equipmentId: item.id,
+            equipmentName: item.name,
+            startDate: borrower.startDate,
+            returnDate: null,
+            status: "active",
+            synced: false
+          };
+
+          setLoans((prev) => [newLoan, ...prev]);
+          setEquipment((prev) =>
+            prev.map((e) => (e.id === item.id ? { ...e, available: false } : e))
+          );
+
+          return newLoan;
+        } else {
+          console.error("Failed to create loan:", result.error);
+          throw new Error(result.error);
+        }
+      }
+    } catch (err) {
+      console.error("Error creating loan:", err);
+      throw err;
+    }
+  };
+
+  /**
+   * returnLoan — marks a loan as returned in the database
+   * @param {string} loanId - id of the loan to close
+   */
+  const returnLoan = async (loanId) => {
+    try {
+      const loan = loans.find((l) => l.id === loanId);
+      if (!loan) {
+        console.error("Loan not found:", loanId);
+        return;
+      }
+
+      const returnDate = today();
+
+      // Update database
+      if (window.electronAPI?.db?.loans?.return) {
+        const result = await window.electronAPI.db.loans.return(loanId, returnDate);
+        if (result.success) {
+          // Update local state
+          setLoans((prev) =>
+            prev.map((l) =>
+              l.id === loanId ? { ...l, returnDate, status: "returned" } : l
+            )
+          );
+          setEquipment((prev) =>
+            prev.map((e) =>
+              e.id === loan.equipmentId ? { ...e, available: true } : e
+            )
+          );
+        } else {
+          console.error("Failed to return loan:", result.error);
+          throw new Error(result.error);
+        }
+      }
+    } catch (err) {
+      console.error("Error returning loan:", err);
+      throw err;
+    }
+  };
+
+  return { equipment, loans, stats, loading, error, createLoan, returnLoan, reloadData: loadDataFromDatabase };
+}
