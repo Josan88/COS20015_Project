@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { INITIAL_EQUIPMENT, INITIAL_LOANS } from "../data/seedData";
-import { today, nextLoanId } from "../utils/helpers";
+import { today } from "../utils/helpers";
 
 /**
  * useLoans
@@ -8,8 +7,8 @@ import { today, nextLoanId } from "../utils/helpers";
  * Loads data from SQLite database via Electron IPC.
  */
 export function useLoans() {
-  const [equipment, setEquipment] = useState(INITIAL_EQUIPMENT);
-  const [loans, setLoans]         = useState(INITIAL_LOANS);
+  const [equipment, setEquipment] = useState([]);
+  const [loans, setLoans]         = useState([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
 
@@ -75,9 +74,6 @@ export function useLoans() {
     } catch (err) {
       console.error("Error loading data from database:", err);
       setError(err.message);
-      // Fall back to seed data
-      setEquipment(INITIAL_EQUIPMENT);
-      setLoans(INITIAL_LOANS);
     } finally {
       setLoading(false);
     }
