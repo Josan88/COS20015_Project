@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   db: {
     equipment: {
       getAll: () => ipcRenderer.invoke("db:equipment:getAll"),
+      create: (equipmentData) => ipcRenderer.invoke("db:equipment:create", equipmentData),
+      update: (equipmentID, updates) => ipcRenderer.invoke("db:equipment:update", equipmentID, updates),
+      delete: (equipmentID) => ipcRenderer.invoke("db:equipment:delete", equipmentID),
     },
 
     // ── Database: Loans ───────────────────────────────────────────────
@@ -37,6 +40,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   sync: {
     verify: () => ipcRenderer.invoke("sync:verify"),
     syncLoans: () => ipcRenderer.invoke("sync:loans"),
+    getSettings: () => ipcRenderer.invoke("sync:getSettings"),
+    setSettings: (settings) => ipcRenderer.invoke("sync:setSettings", settings),
+    getPendingCount: () => ipcRenderer.invoke("sync:getPendingCount"),
+    getConflicts: () => ipcRenderer.invoke("sync:getConflicts"),
+    resolveConflict: (conflictID, resolution, winnerData) => ipcRenderer.invoke("sync:resolveConflict", conflictID, resolution, winnerData),
   },
 
   // ── Platform info (useful for conditional UI) ─────────────────────────

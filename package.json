@@ -9,7 +9,8 @@
     "dev":          "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build":        "vite build",
     "electron:dev": "electron .",
-    "dist":         "vite build && electron-builder"
+    "dist":         "vite build && electron-builder",
+    "seed:couchdb": "node scripts/seed-couchdb.js"
   },
   "dependencies": {
     "react":     "^18.3.1",

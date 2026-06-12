@@ -185,5 +185,81 @@ export function useLoans() {
     }
   };
 
-  return { equipment, loans, stats, loading, error, createLoan, returnLoan, reloadData: loadDataFromDatabase };
+  const createEquipment = async (equipmentData) => {
+    try {
+      if (window.electronAPI?.db?.equipment?.create) {
+        const result = await window.electronAPI.db.equipment.create(equipmentData);
+        if (result.success) {
+          const getCategoryIcon = (category) => {
+            const icons = {
+              'Laptop': '💻', 'Camera': '📷', 'Microcontroller': '🎮',
+              'Projector': '🎬', 'Headphones': '🎧', 'Tablet': '📱', 'Accessory': '🔌',
+            };
+            return icons[category] || '📦';
+          };
+          const newItem = {
+            id: result.data.equipmentID,
+            name: result.data.name,
+            category: result.data.category,
+            available: true,
+            icon: getCategoryIcon(result.data.category),
+          };
+          setEquipment((prev) => [...prev, newItem]);
+          return newItem;
+        } else {
+          throw new Error(result.error);
+        }
+      }
+    } catch (err) {
+      console.error("Error creating equipment:", err);
+      throw err;
+    }
+  };
+
+  const deleteEquipment = async (equipmentID) => {
+    try {
+      if (window.electronAPI?.db?.equipment?.delete) {
+        const result = await window.electronAPI.db.equipment.delete(equipmentID);
+        if (result.success) {
+          setEquipment((prev) => prev.filter((e) => e.id !== equipmentID));
+        } else {
+          throw new Error(result.error);
+        }
+      }
+    } catch (err) {
+      console.error("Error deleting equipment:", err);
+      throw err;
+    }
+  };
+
+  const updateEquipment = async (equipmentID, updates) => {
+    try {
+      if (window.electronAPI?.db?.equipment?.update) {
+        const result = await window.electronAPI.db.equipment.update(equipmentID, updates);
+        if (result.success) {
+          const getCategoryIcon = (category) => {
+            const icons = {
+              'Laptop': '💻', 'Camera': '📷', 'Microcontroller': '🎮',
+              'Projector': '🎬', 'Headphones': '🎧', 'Tablet': '📱', 'Accessory': '🔌',
+            };
+            return icons[category] || '📦';
+          };
+          setEquipment((prev) =>
+            prev.map((e) =>
+              e.id === equipmentID
+                ? { ...e, name: updates.name, category: updates.category, available: updates.available, icon: getCategoryIcon(updates.category) }
+                : e
+            )
+          );
+        } else {
+          throw new Error(result.error);
+        }
+      }
+    } catch (err) {
+      console.error("Error updating equipment:", err);
+      throw err;
+    }
+  };
+
+  return { equipment, loans, stats, loading, error, createLoan, returnLoan, createEquipment, updateEquipment, deleteEquipment, reloadData: loadDataFromDatabase };
 }

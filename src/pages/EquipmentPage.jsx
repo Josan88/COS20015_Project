@@ -1,6 +1,8 @@
 import { useState } from "react";
 import EquipmentGrid from "../components/equipment/EquipmentGrid";
 import LoanFormModal from "../components/loans/LoanFormModal";
+import AddEquipmentModal from "../components/equipment/AddEquipmentModal";
+import EditEquipmentModal from "../components/equipment/EditEquipmentModal";
 
 /**
  * EquipmentPage
@@ -9,24 +11,47 @@ import LoanFormModal from "../components/loans/LoanFormModal";
  * Props:
  *   equipment  {array}
  *   onLoan     {fn(item, borrower)} - called after form submission
+ *   onCreateEquipment {fn(data)}
+ *   onUpdateEquipment {fn(id, data)}
+ *   onDeleteEquipment {fn(id)}
  */
-export default function EquipmentPage({ equipment, onLoan }) {
+export default function EquipmentPage({ equipment, onLoan, onCreateEquipment, onUpdateEquipment, onDeleteEquipment }) {
   const [selectedItem, setSelectedItem] = useState(null);
-  const [showModal, setShowModal]       = useState(false);
+  const [showLoanModal, setShowLoanModal]       = useState(false);
+  const [showAddModal, setShowAddModal]         = useState(false);
+  const [showEditModal, setShowEditModal]       = useState(false);
 
   const handleSelect = (item) => {
     setSelectedItem(item);
-    setShowModal(false); // reset modal if a new item is picked
+    setShowLoanModal(false);
   };
 
   const handleOpenModal = () => {
-    if (selectedItem) setShowModal(true);
+    if (selectedItem) setShowLoanModal(true);
   };
 
   const handleSubmit = (borrower) => {
     onLoan(selectedItem, borrower);
     setSelectedItem(null);
-    setShowModal(false);
+    setShowLoanModal(false);
+  };
+
+  const handleAdd = async (data) => {
+    await onCreateEquipment(data);
+    setShowAddModal(false);
+  };
+
+  const handleEdit = async (updates) => {
+    await onUpdateEquipment(selectedItem.id, updates);
+    setShowEditModal(false);
+    setSelectedItem(null);
+  };
+
+  const handleDelete = async () => {
+    if (!selectedItem) return;
+    if (!confirm(`Delete "${selectedItem.name}"?`)) return;
+    await onDeleteEquipment(selectedItem.id);
+    setSelectedItem(null);
   };
 
   return (
@@ -36,13 +61,31 @@ export default function EquipmentPage({ equipment, onLoan }) {
         selectedItem={selectedItem}
         onSelect={handleSelect}
         onLoan={handleOpenModal}
+        onAdd={() => setShowAddModal(true)}
+        onEdit={() => setShowEditModal(true)}
+        onDelete={handleDelete}
       />
 
-      {showModal && selectedItem && (
+      {showLoanModal && selectedItem && (
         <LoanFormModal
           equipment={selectedItem}
-          onClose={() => setShowModal(false)}
+          onClose={() => setShowLoanModal(false)}
           onSubmit={handleSubmit}
+        />
+      )}
+
+      {showAddModal && (
+        <AddEquipmentModal
+          onClose={() => setShowAddModal(false)}
+          onSubmit={handleAdd}
+        />
+      )}
+
+      {showEditModal && selectedItem && (
+        <EditEquipmentModal
+          equipment={selectedItem}
+          onClose={() => setShowEditModal(false)}
+          onSubmit={handleEdit}
         />
       )}
     </>

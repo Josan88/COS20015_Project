@@ -21,6 +21,9 @@ export default function EquipmentGrid({
   selectedItem,
   onSelect,
   onLoan,
+  onAdd,
+  onEdit,
+  onDelete,
 }) {
   const [search, setSearch]               = useState("");
   const [filterCategory, setFilterCategory] = useState("All");
@@ -127,42 +130,90 @@ export default function EquipmentGrid({
         </div>
       )}
 
-      {/* ── Selection banner ── */}
+      {/* ── Action bar ── */}
+      <div style={{ display: "flex", gap: 8, marginTop: 20, flexWrap: "wrap" }}>
+        <button
+          onClick={onAdd}
+          style={{
+            padding: "9px 20px",
+            background: "#10b981",
+            color: "#fff",
+            border: "none",
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 13,
+            cursor: "pointer",
+          }}
+        >
+          + Add Equipment
+        </button>
+
+        {selectedItem && (
+          <>
+            <button
+              onClick={onLoan}
+              style={{
+                padding: "9px 20px",
+                background: "#1e3a5f",
+                color: "#fff",
+                border: "none",
+                borderRadius: 8,
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Loan This Item →
+            </button>
+            <button
+              onClick={onEdit}
+              style={{
+                padding: "9px 20px",
+                background: "#fff",
+                color: "#3b82f6",
+                border: "2px solid #3b82f6",
+                borderRadius: 8,
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Edit
+            </button>
+            <button
+              onClick={onDelete}
+              style={{
+                padding: "9px 20px",
+                background: "#fff",
+                color: "#ef4444",
+                border: "2px solid #ef4444",
+                borderRadius: 8,
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Delete
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* ── Selection info ── */}
       {selectedItem && (
         <div
           style={{
-            marginTop:      20,
-            padding:        "14px 20px",
-            background:     "#fff7ed",
-            border:         "2px solid #fed7aa",
-            borderRadius:   10,
-            display:        "flex",
-            alignItems:     "center",
-            justifyContent: "space-between",
-            flexWrap:       "wrap",
-            gap:            10,
+            marginTop:      12,
+            padding:        "10px 16px",
+            background:     "#f0f9ff",
+            border:         "1px solid #bae6fd",
+            borderRadius:   8,
+            fontSize:       13,
+            color:          "#0369a1",
+            fontWeight:     500,
           }}
         >
-          <span style={{ fontSize: 14, color: "#92400e", fontWeight: 600 }}>
-            {selectedItem.icon}{" "}
-            <strong>{selectedItem.name}</strong> selected — fill in borrower
-            details to proceed.
-          </span>
-          <button
-            onClick={onLoan}
-            style={{
-              padding:      "9px 20px",
-              background:   "#1e3a5f",
-              color:        "#fff",
-              border:       "none",
-              borderRadius: 8,
-              fontWeight:   700,
-              fontSize:     13,
-              cursor:       "pointer",
-            }}
-          >
-            Loan This Item →
-          </button>
+          {selectedItem.icon} <strong>{selectedItem.name}</strong> selected
         </div>
       )}
     </div>

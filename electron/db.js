@@ -154,11 +154,265 @@ async function createTables() {
         if (err) console.error('Error creating loans table:', err);
       });
 
+      // ===== ChangeLog Table =====
+      db.run(`
+        CREATE TABLE IF NOT EXISTS changelog (
+          ChangeID INTEGER PRIMARY KEY AUTOINCREMENT,
+          TableName TEXT NOT NULL,
+          RecordID TEXT NOT NULL,
+          Operation TEXT NOT NULL,
+          DataJSON TEXT,
+          Timestamp TEXT NOT NULL,
+          SyncStatus TEXT NOT NULL DEFAULT 'pending'
+        )
+      `, (err) => {
+        if (err) console.error('Error creating changelog table:', err);
+      });
+
+      // ===== ConflictLog Table =====
+      db.run(`
+        CREATE TABLE IF NOT EXISTS conflictlog (
+          ConflictID INTEGER PRIMARY KEY AUTOINCREMENT,
+          TableName TEXT NOT NULL,
+          RecordID TEXT NOT NULL,
+          LocalData TEXT,
+          RemoteData TEXT,
+          LocalTimestamp TEXT,
+          RemoteTimestamp TEXT,
+          Resolution TEXT DEFAULT 'pending',
+          ResolvedAt TEXT,
+          CreatedAt TEXT NOT NULL
+        )
+      `, (err) => {
+        if (err) console.error('Error creating conflictlog table:', err);
+      });
+
       // Insert seed data after tables are created
       insertSeedData()
         .then(resolve)
         .catch(reject);
     });
+  });
+}
+
+/**
+ * Log a change to the ChangeLog table
+ */
+function logChange(tableName, recordID, operation, data) {
+  return new Promise((resolve, reject) => {
+    const timestamp = new Date().toISOString();
+    const dataJSON = data ? JSON.stringify(data) : null;
+    db.run(
+      `INSERT INTO changelog (TableName, RecordID, Operation, DataJSON, Timestamp, SyncStatus)
+       VALUES (?, ?, ?, ?, ?, 'pending')`,
+      [tableName, recordID, operation, dataJSON, timestamp],
+      (err) => {
+        if (err) {
+          console.error('Error logging change:', err);
+          reject(err);
+        } else {
+          resolve();
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get all unsynced changes from ChangeLog
+ */
+function getUnsyncedChanges() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM changelog WHERE SyncStatus = 'pending' ORDER BY ChangeID ASC`,
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+}
+
+/**
+ * Mark a change as synced
+ */
+function markChangeSynced(changeID) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE changelog SET SyncStatus = 'synced' WHERE ChangeID = ?`,
+      [changeID],
+      (err) => {
+        if (err) reject(err);
+        else resolve({ success: true });
+      }
+    );
+  });
+}
+
+// ── Two-Way Sync Functions ───────────────────────────────────────────────
+
+/**
+ * Get a record by ID from a table
+ */
+function getRecordById(table, id) {
+  return new Promise((resolve, reject) => {
+    const idColumn = table === 'students' ? 'studentID' : table === 'equipment' ? 'equipmentID' : 'loanID';
+    db.get(`SELECT * FROM ${table} WHERE ${idColumn} = ?`, [id], (err, row) => {
+      if (err) reject(err);
+      else resolve(row || null);
+    });
+  });
+}
+
+/**
+ * Upsert a record from remote (CouchDB)
+ */
+function upsertFromRemote(table, record) {
+  return new Promise((resolve, reject) => {
+    if (table === 'equipment') {
+      const { equipmentID, name, category, available } = record;
+      db.run(
+        `INSERT OR REPLACE INTO equipment (equipmentID, name, category, available) VALUES (?, ?, ?, ?)`,
+        [equipmentID, name, category, available ? 1 : 0],
+        (err) => err ? reject(err) : resolve()
+      );
+    } else if (table === 'loans') {
+      const { loanID, studentID, equipmentID, borrowDate, returnDate, status } = record;
+      db.run(
+        `INSERT OR REPLACE INTO loans (loanID, studentID, equipmentID, borrowDate, returnDate, status, synced) VALUES (?, ?, ?, ?, ?, ?, 1)`,
+        [loanID, studentID, equipmentID, borrowDate, returnDate || null, status],
+        (err) => err ? reject(err) : resolve()
+      );
+    } else if (table === 'students') {
+      const { studentID, firstName, lastName, phone, email } = record;
+      db.run(
+        `INSERT OR REPLACE INTO students (studentID, firstName, lastName, phone, email) VALUES (?, ?, ?, ?, ?)`,
+        [studentID, firstName, lastName, phone, email],
+        (err) => err ? reject(err) : resolve()
+      );
+    } else {
+      reject(new Error(`Unknown table: ${table}`));
+    }
+  });
+}
+
+/**
+ * Update equipment availability
+ */
+function setEquipmentAvailable(equipmentID, available) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE equipment SET available = ? WHERE equipmentID = ?`,
+      [available ? 1 : 0, equipmentID],
+      (err) => err ? reject(err) : resolve()
+    );
+  });
+}
+
+/**
+ * Log a conflict
+ */
+function logConflict(tableName, recordID, localData, remoteData, localTimestamp, remoteTimestamp) {
+  return new Promise((resolve, reject) => {
+    const createdAt = new Date().toISOString();
+    db.run(
+      `INSERT INTO conflictlog (TableName, RecordID, LocalData, RemoteData, LocalTimestamp, RemoteTimestamp, Resolution, CreatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      [
+        tableName,
+        recordID,
+        JSON.stringify(localData),
+        JSON.stringify(remoteData),
+        localTimestamp,
+        remoteTimestamp,
+        createdAt
+      ],
+      (err) => err ? reject(err) : resolve()
+    );
+  });
+}
+
+/**
+ * Get all pending conflicts
+ */
+function getPendingConflicts() {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM conflictlog WHERE Resolution = 'pending' ORDER BY CreatedAt DESC`,
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+}
+
+/**
+ * Resolve a conflict
+ */
+function resolveConflict(conflictID, resolution, winnerData) {
+  return new Promise((resolve, reject) => {
+    const resolvedAt = new Date().toISOString();
+    db.run(
+      `UPDATE conflictlog SET Resolution = ?, ResolvedAt = ? WHERE ConflictID = ?`,
+      [resolution, resolvedAt, conflictID],
+      async (err) => {
+        if (err) return reject(err);
+
+        // Get the conflict record to know which table/record to update
+        db.get(
+          `SELECT * FROM conflictlog WHERE ConflictID = ?`,
+          [conflictID],
+          async (err, conflict) => {
+            if (err) return reject(err);
+            if (!conflict) return reject(new Error('Conflict not found'));
+
+            // Apply the winning data to the local database
+            if (winnerData && resolution !== 'dismissed') {
+              try {
+                await upsertFromRemote(conflict.TableName, winnerData);
+                // Log this as a local change too
+                await logChange(conflict.TableName, conflict.RecordID, 'UPDATE', winnerData);
+              } catch (e) {
+                console.error('Error applying conflict resolution:', e);
+              }
+            }
+
+            resolve({ success: true });
+          }
+        );
+      }
+    );
+  });
+}
+
+/**
+ * Get last sync timestamp
+ */
+function getLastSyncTimestamp() {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT MAX(Timestamp) as lastSync FROM changelog WHERE SyncStatus = 'synced'`,
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row?.lastSync || null);
+      }
+    );
+  });
+}
+
+/**
+ * Mark all pending changes as synced (batch)
+ */
+function markAllChangesSynced() {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE changelog SET SyncStatus = 'synced' WHERE SyncStatus = 'pending'`,
+      (err) => {
+        if (err) reject(err);
+        else resolve({ success: true });
+      }
+    );
   });
 }
 
@@ -305,7 +559,14 @@ function createLoan(loanData) {
             [equipmentID],
             (err) => {
               if (err) reject(err);
-              else resolve({ ...loanData, synced: 0 });
+              else {
+                // Log changes to ChangeLog
+                Promise.all([
+                  logChange('loans', loanID, 'INSERT', loanData),
+                  logChange('equipment', equipmentID, 'UPDATE', { available: 0 })
+                ]).then(() => resolve({ ...loanData, synced: 0 }))
+                  .catch(reject);
+              }
             }
           );
         }
@@ -344,7 +605,14 @@ function returnLoan(loanID, returnDate) {
                   [row.equipmentID],
                   (err) => {
                     if (err) reject(err);
-                    else resolve({ success: true });
+                    else {
+                      // Log changes to ChangeLog
+                      Promise.all([
+                        logChange('loans', loanID, 'UPDATE', { returnDate, status: 'Returned' }),
+                        logChange('equipment', row.equipmentID, 'UPDATE', { available: 1 })
+                      ]).then(() => resolve({ success: true }))
+                        .catch(reject);
+                    }
                   }
                 );
               }
@@ -423,13 +691,107 @@ function getAllStudents() {
   });
 }
 
+/**
+ * Create a new equipment item
+ */
+function createEquipment(equipmentData) {
+  return new Promise((resolve, reject) => {
+    const { equipmentID, name, category } = equipmentData;
+    db.run(
+      `INSERT INTO equipment (equipmentID, name, category, available) VALUES (?, ?, ?, 1)`,
+      [equipmentID, name, category],
+      function(err) {
+        if (err) reject(err);
+        else {
+          logChange('equipment', equipmentID, 'INSERT', { equipmentID, name, category, available: 1 })
+            .then(() => resolve({ ...equipmentData, available: 1 }))
+            .catch(reject);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Update equipment details
+ */
+function updateEquipment(equipmentID, updates) {
+  return new Promise((resolve, reject) => {
+    const { name, category, available } = updates;
+    db.run(
+      `UPDATE equipment SET name = ?, category = ?, available = ? WHERE equipmentID = ?`,
+      [name, category, available ? 1 : 0, equipmentID],
+      function(err) {
+        if (err) reject(err);
+        else {
+          logChange('equipment', equipmentID, 'UPDATE', updates)
+            .then(() => resolve({ success: true }))
+            .catch(reject);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Delete an equipment item (only if not currently on loan)
+ */
+function deleteEquipment(equipmentID) {
+  return new Promise((resolve, reject) => {
+    // First get the equipment data for logging before deletion
+    db.get(
+      `SELECT * FROM equipment WHERE equipmentID = ?`,
+      [equipmentID],
+      (err, equipment) => {
+        if (err) return reject(err);
+        if (!equipment) return reject(new Error('Equipment not found'));
+
+        db.get(
+          `SELECT loanID FROM loans WHERE equipmentID = ? AND status = 'Borrowed'`,
+          [equipmentID],
+          (err, row) => {
+            if (err) return reject(err);
+            if (row) return reject(new Error('Cannot delete: item is currently on loan'));
+            db.run(
+              `DELETE FROM equipment WHERE equipmentID = ?`,
+              [equipmentID],
+              function(err) {
+                if (err) reject(err);
+                else {
+                  logChange('equipment', equipmentID, 'DELETE', equipment)
+                    .then(() => resolve({ success: true }))
+                    .catch(reject);
+                }
+              }
+            );
+          }
+        );
+      }
+    );
+  });
+}
+
 module.exports = {
   initializeDatabase,
   getAllEquipment,
+  createEquipment,
+  updateEquipment,
+  deleteEquipment,
   getAllLoans,
   createLoan,
   returnLoan,
   getUnsyncedLoans,
   markLoanSynced,
   getAllStudents,
+  logChange,
+  getUnsyncedChanges,
+  markChangeSynced,
+  getRecordById,
+  upsertFromRemote,
+  setEquipmentAvailable,
+  logConflict,
+  getPendingConflicts,
+  resolveConflict,
+  getLastSyncTimestamp,
+  markAllChangesSynced,
 };

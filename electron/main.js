@@ -7,6 +7,41 @@ const sync = require("./sync");
 const isDev = !app.isPackaged;
 const VITE_DEV_URL = "http://localhost:5173";
 
+// ── Sync timer management ──────────────────────────────────────────────────
+let syncInterval = "manual"; // "auto" | "5s" | "1min" | "manual"
+let syncTimer = null;
+
+const SYNC_INTERVALS = {
+  "auto":  null,   // sync on every change
+  "5s":    5000,
+  "1min":  60000,
+  "manual": null,
+};
+
+function startSyncTimer() {
+  stopSyncTimer();
+  const ms = SYNC_INTERVALS[syncInterval];
+  if (ms) {
+    syncTimer = setInterval(async () => {
+      console.log(`[SYNC] Auto-syncing (interval: ${syncInterval})...`);
+      try {
+        await sync.syncLoansToCouchDB();
+      } catch (err) {
+        console.error("[SYNC] Auto-sync error:", err);
+      }
+    }, ms);
+    console.log(`[SYNC] Timer started: every ${syncInterval}`);
+  }
+}
+
+function stopSyncTimer() {
+  if (syncTimer) {
+    clearInterval(syncTimer);
+    syncTimer = null;
+    console.log("[SYNC] Timer stopped");
+  }
+}
+
 // ── Window factory ─────────────────────────────────────────────────────────
 function createWindow() {
   const win = new BrowserWindow({
@@ -83,6 +118,36 @@ ipcMain.handle("db:equipment:getAll", async () => {
   }
 });
 
+ipcMain.handle("db:equipment:create", async (event, equipmentData) => {
+  try {
+    const equipment = await db.createEquipment(equipmentData);
+    return { success: true, data: equipment };
+  } catch (err) {
+    console.error("Error creating equipment:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("db:equipment:delete", async (event, equipmentID) => {
+  try {
+    const result = await db.deleteEquipment(equipmentID);
+    return { success: true, data: result };
+  } catch (err) {
+    console.error("Error deleting equipment:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("db:equipment:update", async (event, equipmentID, updates) => {
+  try {
+    const result = await db.updateEquipment(equipmentID, updates);
+    return { success: true, data: result };
+  } catch (err) {
+    console.error("Error updating equipment:", err);
+    return { success: false, error: err.message };
+  }
+});
+
 // ── Database: Loans ───────────────────────────────────────────────────────
 ipcMain.handle("db:loans:getAll", async () => {
   try {
@@ -148,10 +213,58 @@ ipcMain.handle("sync:verify", async () => {
 
 ipcMain.handle("sync:loans", async () => {
   try {
-    const result = await sync.syncLoansToCouchDB();
+    const result = await sync.twoWaySync();
     return result;
   } catch (err) {
     console.error("Error during sync:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+// ── Conflict Management ──────────────────────────────────────────────────
+ipcMain.handle("sync:getConflicts", async () => {
+  try {
+    const conflicts = await db.getPendingConflicts();
+    return { success: true, data: conflicts };
+  } catch (err) {
+    console.error("Error fetching conflicts:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("sync:resolveConflict", async (event, conflictID, resolution, winnerData) => {
+  try {
+    const result = await db.resolveConflict(conflictID, resolution, winnerData);
+    return result;
+  } catch (err) {
+    console.error("Error resolving conflict:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+// ── Sync Settings ─────────────────────────────────────────────────────────
+ipcMain.handle("sync:getSettings", async () => {
+  return { success: true, interval: syncInterval };
+});
+
+ipcMain.handle("sync:setSettings", async (event, settings) => {
+  try {
+    syncInterval = settings.interval || "manual";
+    startSyncTimer();
+    console.log(`[SYNC] Settings updated: interval=${syncInterval}`);
+    return { success: true, interval: syncInterval };
+  } catch (err) {
+    console.error("Error updating sync settings:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("sync:getPendingCount", async () => {
+  try {
+    const changes = await db.getUnsyncedChanges();
+    return { success: true, count: changes.length };
+  } catch (err) {
+    console.error("Error getting pending count:", err);
     return { success: false, error: err.message };
   }
 });
