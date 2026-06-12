@@ -28,6 +28,9 @@ export function useLoans() {
           'Camera': '📷',
           'Microcontroller': '🎮',
           'Projector': '🎬',
+          'Headphones': '🎧',
+          'Tablet': '📱',
+          'Accessory': '🔌',
         };
         return icons[category] || '📦';
       };

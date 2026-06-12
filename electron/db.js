@@ -186,7 +186,9 @@ async function insertSeedData() {
           VALUES
           ('S001','William','Yong','0123456789','william@swinburne.edu.my'),
           ('S002','John','Tan','0112345678','john@swinburne.edu.my'),
-          ('S003','Sarah','Lee','0198765432','sarah@swinburne.edu.my')
+          ('S003','Sarah','Lee','0198765432','sarah@swinburne.edu.my'),
+          ('S004','Emily','Chen','0167890123','emily@swinburne.edu.my'),
+          ('S005','Raj','Kumar','0189012345','raj@swinburne.edu.my')
         `, (err) => {
           if (err) {
             console.error('Error inserting students:', err);
@@ -203,7 +205,11 @@ async function insertSeedData() {
             ('E001','Dell Latitude 5430','Laptop', 1),
             ('E002','Canon EOS R50','Camera', 1),
             ('E003','Arduino Uno R3','Microcontroller', 1),
-            ('E004','Epson Projector X500','Projector', 1)
+            ('E004','Epson Projector X500','Projector', 1),
+            ('E005','Sony WH-1000XM5','Headphones', 1),
+            ('E006','iPad Air M2','Tablet', 1),
+            ('E007','Logitech C920 Webcam','Camera', 1),
+            ('E008','USB-C Hub Adapter','Accessory', 1)
           `, (err) => {
             if (err) {
               console.error('Error inserting equipment:', err);
@@ -212,21 +218,7 @@ async function insertSeedData() {
             }
 
             console.log('Equipment inserted');
-
-            // After equipment, insert loans
-            db.run(`
-              INSERT INTO loans (loanID, studentID, equipmentID, borrowDate, returnDate, status, synced)
-              VALUES
-              ('L001', 'S001', 'E002', '2026-06-12 09:00:00', NULL, 'Borrowed', 0)
-            `, (err) => {
-              if (err) {
-                console.error('Error inserting loans:', err);
-                reject(err);
-              } else {
-                console.log('Seed data inserted successfully');
-                resolve();
-              }
-            });
+            resolve();
           });
         });
       } else {
