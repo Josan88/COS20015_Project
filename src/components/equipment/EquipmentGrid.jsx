@@ -1,10 +1,9 @@
 import { useState, useMemo } from "react";
 import EquipmentCard from "./EquipmentCard";
-import { INITIAL_EQUIPMENT } from "../../data/seedData";
 
-const ALL_CATEGORIES = [
+const getCategories = (equipment) => [
   "All",
-  ...Array.from(new Set(INITIAL_EQUIPMENT.map((e) => e.category))),
+  ...Array.from(new Set(equipment.map((e) => e.category))),
 ];
 
 /**
@@ -26,6 +25,8 @@ export default function EquipmentGrid({
   const [search, setSearch]               = useState("");
   const [filterCategory, setFilterCategory] = useState("All");
   const [filterStatus, setFilterStatus]   = useState("All");
+
+  const ALL_CATEGORIES = useMemo(() => getCategories(equipment), [equipment]);
 
   const filtered = useMemo(
     () =>
