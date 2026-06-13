@@ -112,6 +112,11 @@ async function pullFromCouchDB() {
     // Get last sync timestamp to detect what's new
     const lastSync = await db.getLastSyncTimestamp();
 
+    // BUGFIX (was called inside the for loop): fetch unsynced changes ONCE
+    // before the loop. Calling it per-iteration re-ran the query and meant
+    // a change logged mid-loop would silently shift the conflict picture.
+    const localChanges = await db.getUnsyncedChanges();
+
     for (const row of remoteDocs) {
       const remoteDoc = row.doc;
       const { tableName, recordID, operation, data, localTimestamp } = remoteDoc;
@@ -134,7 +139,6 @@ async function pullFromCouchDB() {
         const localRecord = await db.getRecordById(tableName, recordID);
 
         // Check if we have local unsynced changes for this record
-        const localChanges = await db.getUnsyncedChanges();
         const hasLocalPendingChange = localChanges.some(
           c => c.TableName === tableName && c.RecordID === recordID
         );
@@ -156,7 +160,10 @@ async function pullFromCouchDB() {
             // Remote wins - apply remote data
             console.log(`[SYNC] Remote wins for ${tableName}:${recordID} (remote newer)`);
             await db.upsertFromRemote(tableName, data);
-            await db.markAllChangesSynced();
+            // BUGFIX: was db.markAllChangesSynced() which wiped EVERY pending
+            // change, not just this one. Scope the mark to the resolved record
+            // so other pending edits on unrelated records still get pushed.
+            await db.markChangeSynced(localChange.ChangeID);
           } else if (localTime > remoteTime) {
             // Local wins - keep local, push later
             console.log(`[SYNC] Local wins for ${tableName}:${recordID} (local newer)`);

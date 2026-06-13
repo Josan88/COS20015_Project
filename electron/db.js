@@ -560,12 +560,23 @@ function createLoan(loanData) {
             (err) => {
               if (err) reject(err);
               else {
-                // Log changes to ChangeLog
-                Promise.all([
-                  logChange('loans', loanID, 'INSERT', loanData),
-                  logChange('equipment', equipmentID, 'UPDATE', { available: 0 })
-                ]).then(() => resolve({ ...loanData, synced: 0 }))
-                  .catch(reject);
+                // BUGFIX: was logging {available: 0} for equipment — missing
+                // equipmentID, name, category. Pulling the resulting remote
+                // doc back would KeyError in upsertFromRemote. Read the
+                // post-update row so the changelog carries the full record.
+                db.get(
+                  `SELECT * FROM equipment WHERE equipmentID = ?`,
+                  [equipmentID],
+                  (err, equipRow) => {
+                    if (err) { reject(err); return; }
+                    // Log changes to ChangeLog
+                    Promise.all([
+                      logChange('loans', loanID, 'INSERT', loanData),
+                      logChange('equipment', equipmentID, 'UPDATE', equipRow)
+                    ]).then(() => resolve({ ...loanData, synced: 0 }))
+                      .catch(reject);
+                  }
+                );
               }
             }
           );
@@ -591,27 +602,42 @@ function returnLoan(loanID, returnDate) {
         if (err) {
           reject(err);
         } else {
-          // Get the loan to update equipment
+          // Get the loan to update equipment. BUGFIX: was SELECT equipmentID only.
+          // Now SELECT * so we can log the full post-update loan row in the
+          // changelog — the previous payload ({returnDate, status}) was missing
+          // loanID, studentID, equipmentID, borrowDate, and any other column
+          // upsertFromRemote on the receiving client requires.
           db.get(
-            `SELECT equipmentID FROM loans WHERE loanID = ?`,
+            `SELECT * FROM loans WHERE loanID = ?`,
             [loanID],
-            (err, row) => {
+            (err, loanRow) => {
               if (err) {
                 reject(err);
-              } else if (row) {
+              } else if (loanRow) {
                 // Update equipment availability
                 db.run(
                   `UPDATE equipment SET available = 1 WHERE equipmentID = ?`,
-                  [row.equipmentID],
+                  [loanRow.equipmentID],
                   (err) => {
                     if (err) reject(err);
                     else {
-                      // Log changes to ChangeLog
-                      Promise.all([
-                        logChange('loans', loanID, 'UPDATE', { returnDate, status: 'Returned' }),
-                        logChange('equipment', row.equipmentID, 'UPDATE', { available: 1 })
-                      ]).then(() => resolve({ success: true }))
-                        .catch(reject);
+                      // Read the post-update equipment row for the changelog.
+                      // BUGFIX: was logging {available: 1} only — missing
+                      // equipmentID, name, category. Pulling the resulting
+                      // remote doc back would KeyError in upsertFromRemote.
+                      db.get(
+                        `SELECT * FROM equipment WHERE equipmentID = ?`,
+                        [loanRow.equipmentID],
+                        (err, equipRow) => {
+                          if (err) { reject(err); return; }
+                          // Log changes to ChangeLog
+                          Promise.all([
+                            logChange('loans', loanID, 'UPDATE', loanRow),
+                            logChange('equipment', loanRow.equipmentID, 'UPDATE', equipRow)
+                          ]).then(() => resolve({ success: true }))
+                            .catch(reject);
+                        }
+                      );
                     }
                   }
                 );
@@ -722,17 +748,28 @@ function updateEquipment(equipmentID, updates) {
       `UPDATE equipment SET name = ?, category = ?, available = ? WHERE equipmentID = ?`,
       [name, category, available ? 1 : 0, equipmentID],
       function(err) {
-        if (err) reject(err);
-        else {
-          logChange('equipment', equipmentID, 'UPDATE', updates)
-            .then(() => resolve({ success: true }))
-            .catch(reject);
+        if (err) {
+          reject(err);
+        } else {
+          // BUGFIX: was logging `updates` which is just the changed fields.
+          // Pulling the resulting remote doc back would fail in upsertFromRemote
+          // because columns like equipmentID (and any untouched fields) would be
+          // missing. Read the post-update row and log that.
+          db.get(
+            `SELECT * FROM equipment WHERE equipmentID = ?`,
+            [equipmentID],
+            (err, fullRow) => {
+              if (err) { reject(err); return; }
+              logChange('equipment', equipmentID, 'UPDATE', fullRow)
+                .then(() => resolve({ success: true }))
+                .catch(reject);
+            }
+          );
         }
       }
     );
   });
 }
-
 /**
  * Delete an equipment item (only if not currently on loan)
  */

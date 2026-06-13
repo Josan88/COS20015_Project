@@ -25,7 +25,11 @@ function startSyncTimer() {
     syncTimer = setInterval(async () => {
       console.log(`[SYNC] Auto-syncing (interval: ${syncInterval})...`);
       try {
-        await sync.syncLoansToCouchDB();
+        // BUGFIX: was sync.syncLoansToCouchDB() which is not exported.
+        // sync.js exports twoWaySync / pushToCouchDB / pullFromCouchDB /
+        // verifyCouchDBConnection. Calling the wrong name threw on every tick
+        // so the auto-sync timer never actually synced.
+        await sync.twoWaySync();
       } catch (err) {
         console.error("[SYNC] Auto-sync error:", err);
       }
