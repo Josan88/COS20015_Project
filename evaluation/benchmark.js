@@ -440,6 +440,29 @@ class PouchDBBenchmark {
   async cleanup() {
     await this.db.destroy();
   }
+
+  /**
+   * One-shot pull from a remote into a fresh, empty local PouchDB.
+   * Used by the "initial pull" benchmark scenario — simulates a new
+   * device joining the sync for the first time, with the remote
+   * already containing the documents.
+   */
+  async initialPullFromCouchDB(remoteURL) {
+    const remoteDB = new PouchDB(remoteURL);
+    return new Promise((resolve, reject) => {
+      const syncHandler = this.db
+        .sync(remoteDB)
+        .on('complete', (info) => {
+          resolve({
+            pulled: info.pull?.docs_written || 0,
+            pushed: info.push?.docs_written || 0,
+          });
+        })
+        .on('error', (err) => {
+          reject(err);
+        });
+    });
+  }
 }
 
 // ── Benchmark Runner ───────────────────────────────────────────────────
@@ -456,6 +479,7 @@ class BenchmarkRunner {
       },
       sqlite: {},
       pouchdb: {},
+      initialPull: {},
       comparison: {}
     };
   }
@@ -581,6 +605,60 @@ class BenchmarkRunner {
     } catch (err) {
       log(`PouchDB benchmark failed: ${err.message}`, 'error');
       await pouchdb.cleanup().catch(() => {});
+      throw err;
+    }
+  }
+
+  /**
+   * "Initial pull" scenario — a fresh, empty PouchDB instance joins
+   * a sync that already has data on the remote. This produces a
+   * NON-ZERO pull count, unlike the regular PouchDB benchmark where
+   * push + pull on the same local DB correctly returns 0.
+   *
+   * Uses the same remote database that the regular PouchDB benchmark
+   * just pushed into, so no additional setup is needed.
+   */
+  async runInitialPullBenchmark() {
+    log('━━━ PouchDB Initial-Pull Benchmark (fresh device joins) ━━━', 'header');
+
+    const fresh = new PouchDBBenchmark();
+    const memBefore = getMemoryUsage();
+
+    try {
+      await fresh.initialize();
+      log('Initializing fresh PouchDB (empty) for initial-pull scenario...');
+
+      const remoteURL = `${COUCHDB_URL}/${DB_NAME}_pouchdb`;
+      log(`Pulling from CouchDB: ${remoteURL}`);
+
+      const pullStart = performance.now();
+      const pullResult = await fresh.initialPullFromCouchDB(remoteURL);
+      const pullTime = performance.now() - pullStart;
+      log(`Pulled ${pullResult.pushed === 0 ? pullResult.pulled : '??'} documents in ${formatMs(pullTime)}`, 'success');
+
+      // Verify the local now has the docs
+      const allDocs = await fresh.getAllDocuments();
+      const memAfter = getMemoryUsage();
+
+      this.results.initialPull = {
+        timeMs: pullTime,
+        docsRead: pullResult.pulled,
+        docsPushed: pullResult.pushed,
+        finalLocalCount: allDocs.length,
+        docsPerSec: pullResult.pulled / (pullTime / 1000),
+        memory: {
+          before: memBefore,
+          after: memAfter,
+          deltaRss: memAfter.rss - memBefore.rss,
+          deltaHeap: memAfter.heapUsed - memBefore.heapUsed
+        }
+      };
+
+      await fresh.cleanup();
+      return this.results.initialPull;
+    } catch (err) {
+      log(`Initial-pull benchmark failed: ${err.message}`, 'error');
+      await fresh.cleanup().catch(() => {});
       throw err;
     }
   }
@@ -715,6 +793,25 @@ class BenchmarkRunner {
     console.log(`│ Schema Tables       │ ${String(c.codeComplexity.schemaTables.sqlite).padStart(12)} │ ${String(c.codeComplexity.schemaTables.pouchdb).padStart(12)} │`);
     console.log('└─────────────────────┴──────────────┴──────────────┘');
 
+    // Initial-pull scenario (separate from the regular push-then-pull workload,
+    // which correctly returns 0 docs for PouchDB because the sync already
+    // knows about the just-pushed docs).
+    const ip = this.results.initialPull;
+    if (ip && ip.docsRead !== undefined) {
+      console.log('\n━━━ Initial-Pull Scenario (fresh device joins) ━━━\n');
+      console.log('┌──────────────────────┬──────────────────────────────┐');
+      console.log('│ Metric               │ Value                        │');
+      console.log('├──────────────────────┼──────────────────────────────┤');
+      console.log(`│ Time                 │ ${formatMs(ip.timeMs).padStart(28)} │`);
+      console.log(`│ Documents pulled     │ ${String(ip.docsRead).padStart(28)} │`);
+      console.log(`│ Documents pushed     │ ${String(ip.docsPushed).padStart(28)} │`);
+      console.log(`│ Throughput (docs/sec)│ ${String(Math.round(ip.docsPerSec)).padStart(28)} │`);
+      console.log(`│ Final local count    │ ${String(ip.finalLocalCount).padStart(28)} │`);
+      console.log(`│ RSS Delta            │ ${formatBytes(ip.memory.deltaRss).padStart(28)} │`);
+      console.log(`│ Heap Delta           │ ${formatBytes(ip.memory.deltaHeap).padStart(28)} │`);
+      console.log('└──────────────────────┴──────────────────────────────┘');
+    }
+
     // Summary
     const sqliteWins = [c.insert, c.read, c.push, c.pull, c.memory].filter(r => r.winner === 'sqlite').length;
     const pouchdbWins = [c.insert, c.read, c.push, c.pull, c.memory].filter(r => r.winner === 'pouchdb').length;
@@ -724,6 +821,9 @@ class BenchmarkRunner {
     console.log(`  PouchDB wins: ${pouchdbWins}/5 categories`);
     console.log(`  PouchDB code reduction: ${Math.round(((275 - 201) / 275) * 100)}% sync, ${Math.round(((797 - 434) / 797) * 100)}% DB`);
     console.log(`  PouchDB eliminates: ${197} LOC of manual sync logic`);
+    if (ip && ip.docsRead) {
+      console.log(`  Initial-pull (fresh device): ${ip.docsRead} docs in ${formatMs(ip.timeMs)} (${Math.round(ip.docsPerSec)} docs/sec)`);
+    }
     console.log('');
   }
 }
@@ -753,6 +853,9 @@ async function main() {
 
     // Run PouchDB benchmark
     await runner.runPouchDBBenchmark();
+
+    // Run initial-pull scenario (fresh device joins a populated remote)
+    await runner.runInitialPullBenchmark();
 
     // Generate comparison
     runner.generateComparison();

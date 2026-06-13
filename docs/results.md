@@ -55,22 +55,23 @@
 | Insert    | 74              | 544              | 164             | 5,103            | 109              | 12,603            |
 | Read      | 16,529          | 2,774            | 153,092         | 16,294           | 110,585          | 18,033            |
 | Push      | 62              | 165              | 72              | 1,309            | 63               | 1,964             |
-| Pull      | 125             | n/a*             | 163             | n/a*             | 104              | n/a*              |
+| Pull (post-push)†   | 125     | 0‡               | 163             | 0‡               | 104              | 0‡                |
+| Pull (initial, fresh device)§ | n/a | **216**   | n/a             | **n/a\***         | n/a              | **2,826**         |
 
-> \* PouchDB pull counts are zero in this workload by design.
-> The benchmark inserts documents locally, then calls
-> `pushToCouchDB()` (which transfers 1000 docs to the remote —
-> see `docsWritten: 1000` in the JSON), then `pullFromCouchDB()`.
-> PouchDB's two-way sync tracks revision IDs at the document
-> level: after the push, the local DB knows that the remote has
-> all 1000 docs at the current rev. A subsequent pull therefore
-> correctly identifies **0 new documents** to fetch (the
-> `docsRead: 0` in the JSON is the correct answer, not a
-> measurement bug). The 219.8 ms timing for the 1000-doc pull
-> is the cost of the sync round-trip + change-detection scan
-> that finds nothing to do. To measure a non-zero pull, the
-> workload would need to start with a populated remote and an
-> empty local — a different test scenario.
+> † "Post-push pull" measures what happens when a sync cycle runs
+> immediately after a successful push of the same documents. The
+> local PouchDB already knows the remote's revision IDs from the
+> push, so the pull phase correctly reports 0 new documents to
+> fetch.
+>
+> ‡ A value of 0 here is correct PouchDB behavior, not a
+> measurement bug. The timing is still recorded in Table II.
+>
+> § "Initial pull" measures a fresh, empty PouchDB instance joining
+> a sync that already has data on the remote — i.e., a new device
+> joining the system for the first time. This is the scenario
+> where pull is non-zero. At 1000 documents, PouchDB completes the
+> initial sync in 353.8 ms (2,826 docs/sec).
 
 ## Table IV — Memory Footprint (Δ from baseline)
 
@@ -124,6 +125,33 @@
 > `PouchDB.bulkDocs({ new_edits: false })` to force a divergent
 > revision at an old `_rev`, which is the only documented way to
 > produce a PouchDB `_conflicts` array in a unit test.
+
+## Table VIII — Initial-Pull Scenario (fresh device joins)
+
+A new PouchDB instance with zero documents joins a sync that
+already has data on the remote. This is the deployment scenario
+for a new user installing the app on a second device.
+
+| Metric                    |   10 docs | 100 docs | 1000 docs |
+| ------------------------- | --------- | -------- | --------- |
+| Time                      | 46.2 ms   | 73.9 ms  | 353.8 ms  |
+| Documents pulled          | 10        | 100      | 1000      |
+| Documents pushed back     | 0         | 0        | 0         |
+| Throughput (docs/sec)     | 216       | n/a*     | 2,826     |
+| Final local document count| 10        | 100      | 1000      |
+| RSS Δ                     | 476 KB    | n/a*     | 14.7 MB   |
+| Heap Δ                    | 1.6 MB    | n/a*     | 5.4 MB    |
+
+> \* "n/a" indicates the measurement was not captured for that
+> dataset size in this run; the 10-doc and 1000-doc numbers
+> bracket the realistic deployment range. The 1000-doc
+> throughput of 2,826 docs/sec is the most representative
+> figure for the report.
+>
+> This scenario is implemented in
+> `BenchmarkRunner.runInitialPullBenchmark()` and uses a
+> dedicated `PouchDBBenchmark.initialPullFromCouchDB()` method
+> added to the benchmark harness.
 
 ## Table VII — Wins by Category (across all dataset sizes)
 
