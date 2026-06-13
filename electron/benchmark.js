@@ -7,8 +7,8 @@
 const { studentsDB, equipmentDB, loansDB } = require('./db');
 const PouchDB = require('pouchdb');
 
-// CouchDB configuration
-const COUCHDB_URL = 'http://admin:admin@192.168.0.18:5984/campus_equipment_loan2';
+// CouchDB configuration (env-driven for marker reproducibility)
+const COUCHDB_URL = process.env.COUCHDB_URL || 'http://localhost:5984/campus_equipment_loan2';
 
 // ── Benchmark State ──────────────────────────────────────────────────────
 let benchmarkResults = {

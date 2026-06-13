@@ -11,7 +11,7 @@
  *   node benchmark.js --json       # Output as JSON
  *
  * Environment variables:
- *   COUCHDB_URL  - CouchDB URL (default: http://admin:admin@192.168.0.18:5984)
+ *   COUCHDB_URL  - CouchDB URL (default: http://localhost:5984)
  *   DB_NAME      - Database name prefix (default: benchmark_test)
  *   DOC_COUNT    - Number of documents to test with (default: 100)
  */
@@ -24,7 +24,9 @@ const os = require('os');
 const fs = require('fs');
 
 // ── Configuration ──────────────────────────────────────────────────────
-const COUCHDB_URL = process.env.COUCHDB_URL || 'http://admin:admin@192.168.0.18:5984';
+// Defaults to a local CouchDB; override with the COUCHDB_URL env var
+// (e.g. http://admin:admin@192.168.0.18:5984 for a LAN instance).
+const COUCHDB_URL = process.env.COUCHDB_URL || 'http://localhost:5984';
 const DB_NAME = process.env.DB_NAME || 'benchmark_test';
 const DOC_COUNT = parseInt(process.env.DOC_COUNT) || 100;
 const SQLITE_DB_PATH = path.join(os.tmpdir(), `benchmark_${Date.now()}.db`);
