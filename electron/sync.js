@@ -135,16 +135,26 @@ async function oneTimeSync() {
     try {
       const remoteDB = new (require('pouchdb'))(`${syncURL}_${name}`);
 
-      // One-time sync
-      const result = await db.sync(remoteDB).on('complete', (info) => {
-        console.log(`[SYNC] ${name} sync complete:`, info);
-        return info;
+      // One-time sync.
+      // db.sync() returns the sync handler, not the result. Wrap in a
+      // Promise that resolves with the `info` payload from the
+      // 'complete' event (and rejects on 'error') so the push/pull
+      // counts below are real numbers, not handler properties.
+      const result = await new Promise((resolve, reject) => {
+        const handler = db.sync(remoteDB);
+        handler.on('complete', (info) => {
+          console.log(`[SYNC] ${name} sync complete:`, info);
+          resolve(info);
+        });
+        handler.on('error', (err) => reject(err));
       });
 
       results[name] = {
         success: true,
         pushed: result.push?.docs_written || 0,
-        pulled: result.pull?.docs_written || 0
+        pulled: result.pull?.docs_written || 0,
+        pushErrors: result.push?.errors || 0,
+        pullErrors: result.pull?.errors || 0,
       };
     } catch (err) {
       console.error(`[SYNC] ${name} sync failed:`, err);
