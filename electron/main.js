@@ -25,12 +25,15 @@ function startSyncTimer() {
     syncTimer = setInterval(async () => {
       console.log(`[SYNC] Auto-syncing (interval: ${syncInterval})...`);
       try {
-        await sync.syncLoansToCouchDB();
+        await sync.oneTimeSync();
       } catch (err) {
         console.error("[SYNC] Auto-sync error:", err);
       }
     }, ms);
     console.log(`[SYNC] Timer started: every ${syncInterval}`);
+  } else if (syncInterval === 'auto') {
+    // Start live sync for auto mode
+    sync.startLiveSync();
   }
 }
 
@@ -40,6 +43,7 @@ function stopSyncTimer() {
     syncTimer = null;
     console.log("[SYNC] Timer stopped");
   }
+  sync.stopSync();
 }
 
 // ── Window factory ─────────────────────────────────────────────────────────
@@ -213,7 +217,7 @@ ipcMain.handle("sync:verify", async () => {
 
 ipcMain.handle("sync:loans", async () => {
   try {
-    const result = await sync.twoWaySync();
+    const result = await sync.oneTimeSync();
     return result;
   } catch (err) {
     console.error("Error during sync:", err);
@@ -265,6 +269,59 @@ ipcMain.handle("sync:getPendingCount", async () => {
     return { success: true, count: changes.length };
   } catch (err) {
     console.error("Error getting pending count:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+// ── Benchmark & Evaluation ─────────────────────────────────────────────
+const benchmark = require('./benchmark');
+
+ipcMain.handle("benchmark:run", async () => {
+  try {
+    const results = await benchmark.runBenchmarkSuite();
+    return { success: true, data: results };
+  } catch (err) {
+    console.error("Error running benchmark:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("benchmark:getComparison", async () => {
+  try {
+    const data = benchmark.getComparisonData();
+    return { success: true, data };
+  } catch (err) {
+    console.error("Error getting comparison data:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("benchmark:getMemory", async () => {
+  try {
+    const memory = benchmark.getMemoryUsage();
+    return { success: true, data: memory };
+  } catch (err) {
+    console.error("Error getting memory usage:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("benchmark:getDatabaseSizes", async () => {
+  try {
+    const sizes = await benchmark.getDatabaseSizes();
+    return { success: true, data: sizes };
+  } catch (err) {
+    console.error("Error getting database sizes:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("benchmark:getComplexity", async () => {
+  try {
+    const complexity = benchmark.getCodeComplexityMetrics();
+    return { success: true, data: complexity };
+  } catch (err) {
+    console.error("Error getting complexity metrics:", err);
     return { success: false, error: err.message };
   }
 });

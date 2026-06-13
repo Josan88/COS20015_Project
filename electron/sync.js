@@ -1,229 +1,167 @@
 /**
  * sync.js
- * Two-way CouchDB sync module with conflict detection and resolution
+ * Two-way CouchDB sync using PouchDB's built-in replication
  */
 
-const axios = require('axios');
-const db = require('./db');
+const { studentsDB, equipmentDB, loansDB } = require('./db');
 
 // CouchDB configuration
-const COUCHDB_URL = 'http://admin:admin@192.168.0.18:5984/campus_equipment_loan';
+const COUCHDB_URL = 'http://admin:admin@192.168.0.18:5984/campus_equipment_loan2';
+
+// Track sync state
+let activeSyncHandlers = [];
+let syncStatus = 'idle';
+let lastSyncTime = null;
+let syncListener = null;
 
 /**
- * Push local changes to CouchDB
+ * Set a listener for sync events
  */
-async function pushToCouchDB() {
-  console.log('[SYNC] Pushing local changes to CouchDB...');
+function setSyncListener(listener) {
+  syncListener = listener;
+}
 
-  try {
-    const unsyncedChanges = await db.getUnsyncedChanges();
-
-    if (unsyncedChanges.length === 0) {
-      console.log('[SYNC] No local changes to push.');
-      return { pushed: 0, message: 'No local changes' };
-    }
-
-    console.log(`[SYNC] Found ${unsyncedChanges.length} local change(s) to push`);
-
-    let pushedCount = 0;
-    let failedCount = 0;
-    const errors = [];
-
-    for (const change of unsyncedChanges) {
-      try {
-        // Use a document ID that encodes table + record for easy lookup
-        const docId = `${change.TableName}_${change.RecordID}`;
-
-        // Get existing remote doc to preserve _rev if it exists
-        let existingRev = null;
-        try {
-          const existing = await axios.get(`${COUCHDB_URL}/${docId}`);
-          existingRev = existing.data._rev;
-        } catch (e) {
-          // Doc doesn't exist yet, that's fine
-        }
-
-        const couchDocument = {
-          _id: docId,
-          tableName: change.TableName,
-          recordID: change.RecordID,
-          operation: change.Operation,
-          data: change.DataJSON ? JSON.parse(change.DataJSON) : null,
-          localTimestamp: change.Timestamp,
-          pushedAt: new Date().toISOString(),
-        };
-
-        if (existingRev) {
-          couchDocument._rev = existingRev;
-        }
-
-        await axios.put(`${COUCHDB_URL}/${docId}`, couchDocument);
-
-        console.log(`[SYNC] Pushed Change #${change.ChangeID} (${change.Operation} on ${change.TableName})`);
-        await db.markChangeSynced(change.ChangeID);
-        pushedCount++;
-
-      } catch (err) {
-        failedCount++;
-        console.error(`[SYNC] Failed to push Change #${change.ChangeID}: ${err.message}`);
-        errors.push({ changeID: change.ChangeID, error: err.message });
-      }
-    }
-
-    console.log(`[SYNC] Push completed. Pushed: ${pushedCount}, Failed: ${failedCount}`);
-    return {
-      success: failedCount === 0,
-      pushed: pushedCount,
-      failed: failedCount,
-      errors: errors.length > 0 ? errors : undefined,
-      message: `Pushed ${pushedCount} change(s)` + (failedCount > 0 ? `, ${failedCount} failed` : '')
-    };
-
-  } catch (err) {
-    console.error('[SYNC] Fatal error during push:', err);
-    return { success: false, pushed: 0, error: err.message };
+/**
+ * Emit sync event
+ */
+function emitSyncEvent(event) {
+  if (syncListener) {
+    syncListener(event);
   }
 }
 
 /**
- * Pull remote changes from CouchDB and merge into local SQLite
- * Detects conflicts when both local and remote have changes
+ * Create a single database sync handler
  */
-async function pullFromCouchDB() {
-  console.log('[SYNC] Pulling remote changes from CouchDB...');
+function createSyncHandler(localDB, remoteURL, dbName) {
+  const remoteDB = new (require('pouchdb'))(remoteURL);
 
-  try {
-    // Get all docs from CouchDB
-    const response = await axios.get(`${COUCHDB_URL}/_all_docs?include_docs=true`);
-    const remoteDocs = response.data.rows.filter(r => !r.id.startsWith('_design/'));
-
-    if (remoteDocs.length === 0) {
-      console.log('[SYNC] No remote documents found.');
-      return { pulled: 0, conflicts: 0, message: 'No remote data' };
-    }
-
-    console.log(`[SYNC] Found ${remoteDocs.length} remote document(s)`);
-
-    let pulledCount = 0;
-    let conflictCount = 0;
-    let skippedCount = 0;
-    const conflicts = [];
-
-    // Get last sync timestamp to detect what's new
-    const lastSync = await db.getLastSyncTimestamp();
-
-    for (const row of remoteDocs) {
-      const remoteDoc = row.doc;
-      const { tableName, recordID, operation, data, localTimestamp } = remoteDoc;
-
-      if (!tableName || !recordID || !data) {
-        console.log(`[SYNC] Skipping invalid document: ${row.id}`);
-        skippedCount++;
-        continue;
+  const syncHandler = localDB
+    .sync(remoteDB, { live: true, retry: true })
+    .on('change', (info) => {
+      console.log(`[SYNC] ${dbName} change:`, info.direction, info.change?.docs?.length, 'doc(s)');
+      emitSyncEvent({
+        type: 'change',
+        database: dbName,
+        direction: info.direction,
+        docsCount: info.change?.docs?.length || 0
+      });
+    })
+    .on('paused', (info) => {
+      console.log(`[SYNC] ${dbName} paused (idle)`);
+      if (syncStatus !== 'active') {
+        syncStatus = 'idle';
+        emitSyncEvent({ type: 'idle', database: dbName });
       }
+    })
+    .on('active', () => {
+      console.log(`[SYNC] ${dbName} active (syncing)`);
+      syncStatus = 'active';
+      emitSyncEvent({ type: 'active', database: dbName });
+    })
+    .on('error', (err) => {
+      console.error(`[SYNC] ${dbName} error:`, err);
+      syncStatus = 'error';
+      emitSyncEvent({ type: 'error', database: dbName, error: err.message });
+    });
 
-      try {
-        // Skip DELETE operations from remote (we don't delete locally from sync)
-        if (operation === 'DELETE') {
-          console.log(`[SYNC] Skipping DELETE operation for ${tableName}:${recordID}`);
-          skippedCount++;
-          continue;
-        }
-
-        // Check if record exists locally
-        const localRecord = await db.getRecordById(tableName, recordID);
-
-        // Check if we have local unsynced changes for this record
-        const localChanges = await db.getUnsyncedChanges();
-        const hasLocalPendingChange = localChanges.some(
-          c => c.TableName === tableName && c.RecordID === recordID
-        );
-
-        if (localRecord && hasLocalPendingChange) {
-          // CONFLICT: Both local and remote have changes
-          console.log(`[SYNC] CONFLICT detected for ${tableName}:${recordID}`);
-
-          // Get local change timestamp
-          const localChange = localChanges.find(
-            c => c.TableName === tableName && c.RecordID === recordID
-          );
-
-          // Last-write-wins based on timestamp
-          const localTime = new Date(localChange.Timestamp).getTime();
-          const remoteTime = new Date(localTimestamp || remoteDoc.pushedAt).getTime();
-
-          if (remoteTime > localTime) {
-            // Remote wins - apply remote data
-            console.log(`[SYNC] Remote wins for ${tableName}:${recordID} (remote newer)`);
-            await db.upsertFromRemote(tableName, data);
-            await db.markAllChangesSynced();
-          } else if (localTime > remoteTime) {
-            // Local wins - keep local, push later
-            console.log(`[SYNC] Local wins for ${tableName}:${recordID} (local newer)`);
-            // Local data stays, will be pushed on next sync
-          } else {
-            // Same timestamp - log as conflict for manual resolution
-            console.log(`[SYNC] Timestamps equal for ${tableName}:${recordID} - logging conflict`);
-            await db.logConflict(
-              tableName,
-              recordID,
-              localRecord,
-              data,
-              localChange.Timestamp,
-              localTimestamp || remoteDoc.pushedAt
-            );
-            conflictCount++;
-            conflicts.push({ tableName, recordID });
-          }
-        } else if (!localRecord) {
-          // New record from remote - insert locally
-          console.log(`[SYNC] New remote record: ${tableName}:${recordID}`);
-          await db.upsertFromRemote(tableName, data);
-          pulledCount++;
-        } else {
-          // Record exists locally but no local pending changes - update from remote
-          console.log(`[SYNC] Updating local record from remote: ${tableName}:${recordID}`);
-          await db.upsertFromRemote(tableName, data);
-          pulledCount++;
-        }
-
-      } catch (err) {
-        console.error(`[SYNC] Error processing ${tableName}:${recordID}:`, err.message);
-        skippedCount++;
-      }
-    }
-
-    console.log(`[SYNC] Pull completed. Pulled: ${pulledCount}, Conflicts: ${conflictCount}, Skipped: ${skippedCount}`);
-
-    return {
-      success: true,
-      pulled: pulledCount,
-      conflicts: conflictCount,
-      skipped: skippedCount,
-      conflictList: conflicts,
-      message: `Pulled ${pulledCount} record(s)` + (conflictCount > 0 ? `, ${conflictCount} conflict(s)` : '')
-    };
-
-  } catch (err) {
-    console.error('[SYNC] Fatal error during pull:', err);
-    return { success: false, pulled: 0, error: err.message };
-  }
+  return syncHandler;
 }
 
 /**
- * Full two-way sync: push local changes, then pull remote changes
+ * Start live two-way sync with CouchDB
  */
-async function twoWaySync() {
-  console.log('[SYNC] Starting two-way sync...');
+async function startLiveSync() {
+  console.log('[SYNC] Starting live two-way sync...');
 
-  const pushResult = await pushToCouchDB();
-  const pullResult = await pullFromCouchDB();
+  // Stop any existing sync
+  stopSync();
+
+  const syncURL = `${COUCHDB_URL}`;
+
+  // Start sync for each database
+  const studentsSync = createSyncHandler(studentsDB, `${syncURL}_students`, 'students');
+  const equipmentSync = createSyncHandler(equipmentDB, `${syncURL}_equipment`, 'equipment');
+  const loansSync = createSyncHandler(loansDB, `${syncURL}_loans`, 'loans');
+
+  activeSyncHandlers = [studentsSync, equipmentSync, loansSync];
+  syncStatus = 'active';
+  lastSyncTime = new Date().toISOString();
+
+  console.log('[SYNC] Live sync started for all databases');
+  return { success: true, message: 'Live sync started' };
+}
+
+/**
+ * Perform a single push-pull sync (non-live)
+ */
+async function oneTimeSync() {
+  console.log('[SYNC] Starting one-time sync...');
+
+  const syncURL = `${COUCHDB_URL}`;
+  const results = {};
+
+  const databases = [
+    { name: 'students', db: studentsDB },
+    { name: 'equipment', db: equipmentDB },
+    { name: 'loans', db: loansDB }
+  ];
+
+  for (const { name, db } of databases) {
+    try {
+      const remoteDB = new (require('pouchdb'))(`${syncURL}_${name}`);
+
+      // One-time sync
+      const result = await db.sync(remoteDB).on('complete', (info) => {
+        console.log(`[SYNC] ${name} sync complete:`, info);
+        return info;
+      });
+
+      results[name] = {
+        success: true,
+        pushed: result.push?.docs_written || 0,
+        pulled: result.pull?.docs_written || 0
+      };
+    } catch (err) {
+      console.error(`[SYNC] ${name} sync failed:`, err);
+      results[name] = { success: false, error: err.message };
+    }
+  }
+
+  lastSyncTime = new Date().toISOString();
+  console.log('[SYNC] One-time sync completed:', results);
 
   return {
-    success: pushResult.success && pullResult.success,
-    push: pushResult,
-    pull: pullResult,
-    message: `Push: ${pushResult.message}. Pull: ${pullResult.message}`
+    success: Object.values(results).every(r => r.success),
+    results,
+    message: 'One-time sync completed'
+  };
+}
+
+/**
+ * Stop all sync operations
+ */
+function stopSync() {
+  activeSyncHandlers.forEach(handler => {
+    try {
+      handler.cancel();
+    } catch (err) {
+      console.error('[SYNC] Error stopping sync:', err);
+    }
+  });
+  activeSyncHandlers = [];
+  syncStatus = 'idle';
+  console.log('[SYNC] Sync stopped');
+}
+
+/**
+ * Get current sync status
+ */
+function getSyncStatus() {
+  return {
+    status: syncStatus,
+    lastSyncTime,
+    activeSyncs: activeSyncHandlers.length
   };
 }
 
@@ -232,11 +170,15 @@ async function twoWaySync() {
  */
 async function verifyCouchDBConnection() {
   try {
-    const response = await axios.get(COUCHDB_URL);
+    const PouchDB = require('pouchdb');
+    const testDB = new PouchDB(`${COUCHDB_URL}_test`);
+    const info = await testDB.info();
+    await testDB.destroy();
+
     console.log('[SYNC] CouchDB connection verified');
     return {
       success: true,
-      database: response.data.db_name,
+      database: info.db_name,
       message: 'Connected to CouchDB'
     };
   } catch (err) {
@@ -250,8 +192,10 @@ async function verifyCouchDBConnection() {
 }
 
 module.exports = {
-  twoWaySync,
-  pushToCouchDB,
-  pullFromCouchDB,
+  startLiveSync,
+  oneTimeSync,
+  stopSync,
+  getSyncStatus,
   verifyCouchDBConnection,
+  setSyncListener,
 };

@@ -43,7 +43,7 @@ export function useLoans() {
             id: e.equipmentID,
             name: e.name,
             category: e.category,
-            available: e.available === 1,
+            available: !!e.available,
             icon: getCategoryIcon(e.category)
           }));
           setEquipment(formattedEquip);
@@ -65,7 +65,7 @@ export function useLoans() {
             startDate: l.startDate,
             returnDate: l.returnDate,
             status: l.status === 'Borrowed' ? 'active' : l.status === 'Returned' ? 'returned' : l.status.toLowerCase(),
-            synced: l.synced === 1
+            synced: !!l.synced
           }));
           setLoans(formattedLoans);
         } else {

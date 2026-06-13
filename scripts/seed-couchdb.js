@@ -1,115 +1,99 @@
 /**
  * seed-couchdb.js
- * External script to insert all local SQLite data into CouchDB
+ * External script to seed CouchDB with data from PouchDB
  * 
  * Usage: node scripts/seed-couchdb.js
  */
 
-const sqlite3 = require('sqlite3').verbose();
-const axios = require('axios');
+const PouchDB = require('pouchdb');
 const path = require('path');
 const os = require('os');
 
 // CouchDB configuration
-const COUCHDB_URL = 'http://admin:admin@192.168.0.18:5984/campus_equipment_loan';
+const COUCHDB_URL = 'http://admin:admin@192.168.0.18:5984';
 
-// Database path (same as main app)
-const DB_PATH = path.join(os.homedir(), 'AppData', 'Roaming', 'equipment-loan-app', 'equipment-loan.db');
+// PouchDB paths (same as main app)
+const DB_DIR = path.join(os.homedir(), 'AppData', 'Roaming', 'equipment-loan-app');
 
-const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READONLY);
+// Create PouchDB instances
+const studentsDB = new PouchDB(path.join(DB_DIR, 'students'));
+const equipmentDB = new PouchDB(path.join(DB_DIR, 'equipment'));
+const loansDB = new PouchDB(path.join(DB_DIR, 'loans'));
 
-function getAll(table) {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM ${table}`, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows || []);
-    });
-  });
+async function getAllFromPouchDB(db) {
+  const result = await db.allDocs({ include_docs: true });
+  return result.rows
+    .map(row => row.doc)
+    .filter(doc => !doc._id.startsWith('_design/'));
 }
 
-async function seedTable(tableName, records, idField) {
-  console.log(`\nSeeding ${tableName}... (${records.length} records)`);
+async function seedToCouchDB(localDB, remoteDBName) {
+  const records = await getAllFromPouchDB(localDB);
+  console.log(`\nSeeding ${remoteDBName}... (${records.length} records)`);
+
+  const remoteDB = new PouchDB(`${COUCHDB_URL}/${remoteDBName}`);
 
   let inserted = 0;
   let skipped = 0;
 
   for (const record of records) {
-    const docId = `${tableName}_${record[idField]}`;
-
     try {
-      // Check if doc already exists
-      let existingRev = null;
+      // Check if doc already exists in remote
       try {
-        const existing = await axios.get(`${COUCHDB_URL}/${docId}`);
-        existingRev = existing.data._rev;
-        console.log(`  Skipping ${docId} (already exists)`);
+        const existing = await remoteDB.get(record._id);
+        console.log(`  Skipping ${record._id} (already exists)`);
         skipped++;
         continue;
-      } catch (e) {
+      } catch (err) {
+        if (err.status !== 404) throw err;
         // Doc doesn't exist, proceed to insert
       }
 
-      const doc = {
-        _id: docId,
-        tableName: tableName,
-        recordID: record[idField],
-        operation: 'INSERT',
-        data: record,
-        localTimestamp: new Date().toISOString(),
-        pushedAt: new Date().toISOString(),
-        source: 'seed-script'
-      };
-
-      await axios.put(`${COUCHDB_URL}/${docId}`, doc);
-      console.log(`  Inserted ${docId}`);
+      // Remove _rev for new document
+      const { _rev, ...docData } = record;
+      await remoteDB.put({ ...docData, _id: record._id });
+      console.log(`  Inserted ${record._id}`);
       inserted++;
-
     } catch (err) {
-      console.error(`  Failed to insert ${docId}:`, err.message);
+      console.error(`  Failed to insert ${record._id}:`, err.message);
     }
   }
 
-  console.log(`  ${tableName}: ${inserted} inserted, ${skipped} skipped`);
+  console.log(`  ${remoteDBName}: ${inserted} inserted, ${skipped} skipped`);
   return { inserted, skipped };
 }
 
 async function main() {
   console.log('=== CouchDB Seed Script ===');
-  console.log(`SQLite: ${DB_PATH}`);
+  console.log(`PouchDB dir: ${DB_DIR}`);
   console.log(`CouchDB: ${COUCHDB_URL}`);
 
   // Verify CouchDB connection
   try {
-    await axios.get(COUCHDB_URL);
+    const testDB = new PouchDB(`${COUCHDB_URL}/_test`);
+    await testDB.info();
+    await testDB.destroy();
     console.log('\n✓ CouchDB connection verified');
   } catch (err) {
     console.error('\n✗ Cannot connect to CouchDB:', err.message);
     process.exit(1);
   }
 
-  // Verify SQLite exists
-  const fs = require('fs');
-  if (!fs.existsSync(DB_PATH)) {
-    console.error('\n✗ SQLite database not found at:', DB_PATH);
-    process.exit(1);
-  }
-  console.log('✓ SQLite database found');
+  // Read all data from PouchDB
+  const students = await getAllFromPouchDB(studentsDB);
+  const equipment = await getAllFromPouchDB(equipmentDB);
+  const loans = await getAllFromPouchDB(loansDB);
 
-  // Read all data
-  const students = await getAll('students');
-  const equipment = await getAll('equipment');
-  const loans = await getAll('loans');
-
-  console.log(`\nData loaded from SQLite:`);
+  console.log(`\nData loaded from PouchDB:`);
   console.log(`  Students: ${students.length}`);
   console.log(`  Equipment: ${equipment.length}`);
   console.log(`  Loans: ${loans.length}`);
 
-  // Seed each table
+  // Seed each collection to CouchDB
   const results = {};
-  results.students = await seedTable('students', students, 'studentID');
-  results.equipment = await seedTable('equipment', equipment, 'equipmentID');
-  results.loans = await seedTable('loans', loans, 'loanID');
+  results.students = await seedToCouchDB(studentsDB, 'campus_equipment_loan_students');
+  results.equipment = await seedToCouchDB(equipmentDB, 'campus_equipment_loan_equipment');
+  results.loans = await seedToCouchDB(loansDB, 'campus_equipment_loan_loans');
 
   // Summary
   const totalInserted = results.students.inserted + results.equipment.inserted + results.loans.inserted;
@@ -119,12 +103,9 @@ async function main() {
   console.log(`Total inserted: ${totalInserted}`);
   console.log(`Total skipped: ${totalSkipped}`);
   console.log('\nDone! You can now test two-way sync.');
-
-  db.close();
 }
 
 main().catch(err => {
   console.error('Fatal error:', err);
-  db.close();
   process.exit(1);
 });

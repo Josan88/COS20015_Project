@@ -6,6 +6,7 @@ import TitleBar        from "./components/ui/TitleBar";
 import EquipmentPage   from "./pages/EquipmentPage";
 import LoansPage       from "./pages/LoansPage";
 import ConflictModal   from "./components/sync/ConflictModal";
+import BenchmarkPage   from "./pages/BenchmarkPage";
 
 const STAT_CONFIG = [
   { key: "total",       label: "Total Items",  color: "#1e3a5f", borderColor: "#e0e7ef" },
@@ -201,7 +202,7 @@ export default function App() {
 
         {/* Tab switcher + Sync controls */}
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          {["equipment", "loans"].map((t) => (
+          {["equipment", "loans", "benchmark"].map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -217,7 +218,7 @@ export default function App() {
                 transition: "all 0.15s",
               }}
             >
-              {t === "equipment" ? "Equipment" : "Loans"}
+              {t === "equipment" ? "Equipment" : t === "loans" ? "Loans" : "Evaluation"}
               {t === "loans" && stats.activeLoans > 0 && (
                 <span
                   style={{
@@ -344,8 +345,10 @@ export default function App() {
         {/* Pages */}
         {tab === "equipment" ? (
           <EquipmentPage equipment={equipment} onLoan={handleLoan} onCreateEquipment={createEquipment} onUpdateEquipment={updateEquipment} onDeleteEquipment={deleteEquipment} />
-        ) : (
+        ) : tab === "loans" ? (
           <LoansPage loans={loans} equipment={equipment} onReturn={handleReturn} />
+        ) : (
+          <BenchmarkPage />
         )}
       </div>
       </main>
