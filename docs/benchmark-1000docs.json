@@ -1,0 +1,5 @@
+╔══════════════════════════════════════════════════════════════╗
+║  SQLite↔CouchDB vs PouchDB↔CouchDB Sync Benchmark         ║
+╚══════════════════════════════════════════════════════════════╝
+
+Benchmark failed: Pull failed: Request failed with status code 404
