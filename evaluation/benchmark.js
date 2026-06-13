@@ -412,8 +412,14 @@ class PouchDBBenchmark {
 
     return new Promise((resolve, reject) => {
       let bytesReceived = 0;
-      const syncHandler = remoteDB
-        .sync(this.db)
+      // this.db.sync(remoteDB) — sync from the local DB's perspective,
+      // so info.direction === 'pull' means data came FROM remoteDB INTO
+      // this.db (which is what the function name says: pull FROM CouchDB).
+      // The previous code had remoteDB.sync(this.db) which inverted the
+      // semantics — info.pull would have counted docs pushed local→remote
+      // instead of pulled remote→local.
+      const syncHandler = this.db
+        .sync(remoteDB)
         .on('change', (info) => {
           if (info.direction === 'pull') {
             bytesReceived += info.change?.docs?.length || 0;

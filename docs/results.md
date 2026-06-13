@@ -57,10 +57,20 @@
 | Push      | 62              | 165              | 72              | 1,309            | 63               | 1,964             |
 | Pull      | 125             | n/a*             | 163             | n/a*             | 104              | n/a*              |
 
-> \* PouchDB pull counts are not surfaced by the partner's benchmark
-> harness (`PouchDBBenchmark.pullFromCouchDB` does not return
-> `info.pull.docs_written`; only the elapsed time is recorded). The
-> timing itself is real.
+> \* PouchDB pull counts are zero in this workload by design.
+> The benchmark inserts documents locally, then calls
+> `pushToCouchDB()` (which transfers 1000 docs to the remote —
+> see `docsWritten: 1000` in the JSON), then `pullFromCouchDB()`.
+> PouchDB's two-way sync tracks revision IDs at the document
+> level: after the push, the local DB knows that the remote has
+> all 1000 docs at the current rev. A subsequent pull therefore
+> correctly identifies **0 new documents** to fetch (the
+> `docsRead: 0` in the JSON is the correct answer, not a
+> measurement bug). The 219.8 ms timing for the 1000-doc pull
+> is the cost of the sync round-trip + change-detection scan
+> that finds nothing to do. To measure a non-zero pull, the
+> workload would need to start with a populated remote and an
+> empty local — a different test scenario.
 
 ## Table IV — Memory Footprint (Δ from baseline)
 
