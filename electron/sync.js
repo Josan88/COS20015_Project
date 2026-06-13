@@ -3,7 +3,7 @@
  * Two-way CouchDB sync using PouchDB's built-in replication
  */
 
-const { studentsDB, equipmentDB, loansDB } = require('./db');
+const { studentsDB, equipmentDB, loansDB, detectConflicts } = require('./db');
 
 // CouchDB configuration (env-driven for marker reproducibility)
 const COUCHDB_URL = process.env.COUCHDB_URL || 'http://localhost:5984/campus_equipment_loan2';
@@ -13,6 +13,27 @@ let activeSyncHandlers = [];
 let syncStatus = 'idle';
 let lastSyncTime = null;
 let syncListener = null;
+
+// Debounce helper: a burst of sync 'change' events for the same DB
+// within CONFLICT_SCAN_DEBOUNCE_MS only triggers one detectConflicts().
+let conflictScanTimer = null;
+const CONFLICT_SCAN_DEBOUNCE_MS = 750;
+
+function scheduleConflictScan(dbName) {
+  if (conflictScanTimer) clearTimeout(conflictScanTimer);
+  conflictScanTimer = setTimeout(async () => {
+    conflictScanTimer = null;
+    try {
+      const newConflicts = await detectConflicts();
+      if (newConflicts.length > 0) {
+        console.log(`[SYNC] Detected ${newConflicts.length} new conflict(s) after ${dbName} change:`, newConflicts);
+        emitSyncEvent({ type: 'conflicts', database: dbName, count: newConflicts.length, items: newConflicts });
+      }
+    } catch (err) {
+      console.error('[SYNC] Conflict detection failed:', err);
+    }
+  }, CONFLICT_SCAN_DEBOUNCE_MS);
+}
 
 /**
  * Set a listener for sync events
@@ -46,6 +67,9 @@ function createSyncHandler(localDB, remoteURL, dbName) {
         direction: info.direction,
         docsCount: info.change?.docs?.length || 0
       });
+      // Debounce conflict detection: a burst of changes can produce many
+      // _conflicts arrays; we only need to scan once they're all in.
+      scheduleConflictScan(dbName);
     })
     .on('paused', (info) => {
       console.log(`[SYNC] ${dbName} paused (idle)`);
@@ -131,9 +155,22 @@ async function oneTimeSync() {
   lastSyncTime = new Date().toISOString();
   console.log('[SYNC] One-time sync completed:', results);
 
+  // After sync, scan for documents with _conflicts and log them.
+  // The live-sync 'change' handler does the same on a debounce.
+  let newConflicts = [];
+  try {
+    newConflicts = await detectConflicts();
+    if (newConflicts.length > 0) {
+      console.log(`[SYNC] Detected ${newConflicts.length} new conflict(s):`, newConflicts);
+    }
+  } catch (err) {
+    console.error('[SYNC] Conflict detection failed:', err);
+  }
+
   return {
     success: Object.values(results).every(r => r.success),
     results,
+    newConflicts: newConflicts.length,
     message: 'One-time sync completed'
   };
 }
