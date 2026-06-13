@@ -7,8 +7,16 @@ const PouchDB = require('pouchdb');
 const path = require('path');
 const { app } = require('electron');
 
-// Database path: store in user's app data directory
-const DB_DIR = app.getPath('userData');
+// Database path: store in user's app data directory.
+// Tests can override via POUCHDB_DIR_OVERRIDE to point at a temp
+// directory and avoid the Electron `app` import.
+let DB_DIR;
+if (process.env.POUCHDB_DIR_OVERRIDE) {
+  DB_DIR = process.env.POUCHDB_DIR_OVERRIDE;
+} else {
+  const { app } = require('electron');
+  DB_DIR = app.getPath('userData');
+}
 
 // Create separate PouchDB instances for each collection
 const studentsDB = new PouchDB(path.join(DB_DIR, 'students'));
